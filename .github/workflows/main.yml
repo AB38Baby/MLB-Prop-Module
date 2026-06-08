@@ -1,31 +1,31 @@
 name: MLB Report
 
 on:
-workflow_dispatch:
+  workflow_dispatch:
 
 jobs:
-run-report:
-runs-on: ubuntu-latest
-steps:
-  - name: Checkout Repo
-    uses: actions/checkout@v4
+  run-report:
+    runs-on: ubuntu-latest
 
-  - name: Setup Python
-    uses: actions/setup-python@v5
-    with:
-      python-version: "3.11"
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
 
-  - name: Install Dependencies
-    run: |
-      pip install -r requirements.txt
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-  - name: Run Script
-    run: |
-      python main.py
+      - name: Install Dependencies
+        run: |
+          pip install -r requirements.txt
 
-  - name: Upload CSV
-    uses: actions/upload-artifact@v4
-    with:
-      name: mlb-report
-      path: "*.csv"
-```
+      - name: Run Script
+        run: |
+          python main.py
+
+      - name: Upload CSV
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlb-report
+          path: "*.csv"
