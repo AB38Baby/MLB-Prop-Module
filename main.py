@@ -2,102 +2,101 @@ import pandas as pd
 import requests
 from datetime import datetime
 
-# ==========================
-# ACTIVE HIT STREAKS
-# ==========================
+# =====================================
+# TODAY'S MLB SCHEDULE
+# =====================================
 
-def get_hit_streaks():
+def get_todays_games():
+    today = datetime.today().strftime("%Y-%m-%d")
 
-    try:
-        tables = pd.read_html(
-            "https://www.baseballmusings.com/cgi-bin/CurStreak.py"
-        )
+    url = f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={today}"
 
-        streaks = tables[0]
+    data = requests.get(url, timeout=30).json()
 
-        streaks.columns = [
-            "Player",
-            "Games",
-            "AB",
-            "Runs",
-            "Hits",
-            "HR",
-            "RBI",
-            "BB",
-            "SO",
-            "AVG",
-            "OBP",
-            "SLG",
-            "LastGame"
+    games = []
+
+    for date in data.get("dates", []):
+        for game in date.get("games", []):
+
+            away_team = game["teams"]["away"]["team"]["name"]
+            home_team = game["teams"]["home"]["team"]["name"]
+
+            away_pitcher = (
+                game["teams"]["away"]
+                .get("probablePitcher", {})
+                .get("fullName", "TBD")
+            )
+
+            home_pitcher = (
+                game["teams"]["home"]
+                .get("probablePitcher", {})
+                .get("fullName", "TBD")
+            )
+
+            games.append([
+                away_team,
+                home_team,
+                away_pitcher,
+                home_pitcher
+            ])
+
+    return pd.DataFrame(
+        games,
+        columns=[
+            "Away Team",
+            "Home Team",
+            "Away Pitcher",
+            "Home Pitcher"
         ]
+    )
 
-        return streaks[["Player", "Games"]]
+# =====================================
+# MLB HITTING STATS
+# =====================================
 
-    except Exception as e:
-
-        print("Streak load error:", e)
-
-        return pd.DataFrame(
-            columns=["Player", "Games"]
-        )
-
-# ==========================
-# MLB LEADERS
-# ==========================
-
-def get_mlb_hit_leaders():
+def get_hitters():
 
     url = (
         "https://statsapi.mlb.com/api/v1/stats"
         "?stats=season"
         "&group=hitting"
-        "&sortStat=hits"
         "&playerPool=ALL"
-        "&limit=200"
+        "&limit=500"
         "&sportIds=1"
     )
 
-    data = requests.get(url).json()
+    data = requests.get(url, timeout=30).json()
 
     players = []
 
-    try:
+    for row in data["stats"][0]["splits"]:
 
-        splits = data["stats"][0]["splits"]
-
-        for row in splits:
-
+        try:
             player = row["player"]["fullName"]
+            stat = row["stat"]
 
-            stats = row["stat"]
+            avg = float(stat.get("avg", ".000"))
+            slg = float(stat.get("slg", ".000"))
+            hr = int(stat.get("homeRuns", 0))
+            hits = int(stat.get("hits", 0))
+            ab = int(stat.get("atBats", 0))
+            pa = int(stat.get("plateAppearances", 0))
 
-            avg = float(
-                stats.get("avg", ".000")
-            )
-
-            slg = float(
-                stats.get("slg", ".000")
-            )
-
-            hr = int(
-                stats.get("homeRuns", 0)
-            )
-
-            pa = int(
-                stats.get("plateAppearances", 1)
-            )
+            if ab < 50:
+                continue
 
             players.append([
                 player,
                 avg,
                 slg,
                 hr,
+                hits,
+                ab,
                 pa
             ])
 
-    except Exception as e:
-
-        print("MLB API error:", e)
+        except Exception:
+            continue
 
     return pd.DataFrame(
         players,
@@ -106,84 +105,68 @@ def get_mlb_hit_leaders():
             "AVG",
             "SLG",
             "HR",
+            "Hits",
+            "AB",
             "PA"
         ]
     )
 
-# ==========================
-# HIT MODEL
-# ==========================
+# =====================================
+# HIT PROBABILITY
+# =====================================
 
-def hit_probability(avg, streak):
+def hit_probability(avg, expected_ab=4):
+    probability = 1 - ((1 - avg) ** expected_ab)
+    return round(probability * 100, 1)
 
-    score = (
-        avg * 0.85
-        +
-        min(streak * 0.01, 0.10)
-    )
+# =====================================
+# TWO HIT PROBABILITY
+# =====================================
 
-    return round(
-        min(score, 0.95) * 100,
-        1
-    )
+def two_hit_probability(avg, expected_ab=4):
 
-# ==========================
-# HR MODEL
-# ==========================
+    p = avg
+
+    p0 = (1 - p) ** expected_ab
+
+    p1 = expected_ab * p * ((1 - p) ** (expected_ab - 1))
+
+    return round((1 - p0 - p1) * 100, 1)
+
+# =====================================
+# HR PROBABILITY
+# =====================================
 
 def hr_probability(hr, pa, slg):
 
-    if pa <= 0:
+    if pa == 0:
         return 0
 
     hr_rate = hr / pa
 
-    score = (
-        hr_rate * 6
-        +
-        slg * 0.30
-    )
+    score = (hr_rate * 4.5) + (slg * 0.15)
 
-    return round(
-        min(score, 0.45) * 100,
-        1
-    )
+    return round(min(score, 0.40) * 100, 1)
 
-# ==========================
-# BUILD REPORT
-# ==========================
+# =====================================
+# MAIN
+# =====================================
 
-def build_report():
+if __name__ == "__main__":
 
-    print("Loading MLB stats...")
+    print("Loading today's schedule...")
 
-    stats = get_mlb_hit_leaders()
+    schedule = get_todays_games()
 
-    print("Loading streaks...")
+    print("Loading hitter stats...")
 
-    streaks = get_hit_streaks()
+    hitters = get_hitters()
 
-    df = stats.merge(
-        streaks,
-        on="Player",
-        how="left"
-    )
+    hitters["Hit_Prob"] = hitters["AVG"].apply(hit_probability)
 
-    df["Games"] = (
-        df["Games"]
-        .fillna(0)
-        .astype(int)
-    )
+    hitters["TwoHit_Prob"] = hitters["AVG"].apply(two_hit_probability)
 
-    df["Hit_Prob"] = df.apply(
-        lambda x: hit_probability(
-            x["AVG"],
-            x["Games"]
-        ),
-        axis=1
-    )
-
-    df["HR_Prob"] = df.apply(
+    hitters["HR_Prob"] = hitters.apply(
         lambda x: hr_probability(
             x["HR"],
             x["PA"],
@@ -192,47 +175,35 @@ def build_report():
         axis=1
     )
 
-    df = df.sort_values(
+    hitters = hitters.sort_values(
         "Hit_Prob",
         ascending=False
     )
 
-    return df
+    today = datetime.today().strftime("%Y-%m-%d")
 
-# ==========================
-# MAIN
-# ==========================
+    schedule_file = f"TODAYS_GAMES_{today}.csv"
+    props_file = f"HIT_PROPS_{today}.csv"
 
-if __name__ == "__main__":
+    schedule.to_csv(schedule_file, index=False)
+    hitters.to_csv(props_file, index=False)
 
-    report = build_report()
-
-    today = datetime.today().strftime(
-        "%Y-%m-%d"
-    )
-
-    filename = (
-        f"MLB_PROPS_{today}.csv"
-    )
-
-    report.to_csv(
-        filename,
-        index=False
-    )
+    print("\n===== TODAY'S GAMES =====\n")
+    print(schedule)
 
     print("\n===== TOP 25 HIT PROPS =====\n")
 
     print(
-        report[
+        hitters[
             [
                 "Player",
-                "Games",
+                "AVG",
                 "Hit_Prob",
+                "TwoHit_Prob",
                 "HR_Prob"
             ]
         ].head(25)
     )
 
-    print(
-        f"\nSaved to {filename}"
-    )
+    print(f"\nSaved: {schedule_file}")
+    print(f"Saved: {props_file}")
